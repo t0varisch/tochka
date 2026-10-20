@@ -113,7 +113,8 @@ export async function openReader(root: HTMLElement, id: string, app: AppCtx): Pr
 
 	// ---- проигрыватель
 	let lastSaved = 0;
-	let wakeLock: { release(): Promise<void> } | null = null;
+	type Sentinel = { release(): Promise<void>; addEventListener(t: "release", f: () => void): void };
+	let wakeLock: Sentinel | null = null;
 
 	const player = new Player(stream, { wpm: s.wpm, smart: s.smart, ramp: s.ramp }, onWord, onState);
 	player.index = Math.min(meta.position, stream.words.length - 1);
@@ -363,8 +364,14 @@ export async function openReader(root: HTMLElement, id: string, app: AppCtx): Pr
 	// ---- экран не гаснет во время чтения
 	async function lockScreen(): Promise<void> {
 		try {
-			const wl = (navigator as unknown as { wakeLock?: { request(t: string): Promise<{ release(): Promise<void> }> } }).wakeLock;
-			if (wl && !wakeLock) wakeLock = await wl.request("screen");
+			const wl = (navigator as unknown as { wakeLock?: { request(t: string): Promise<Sentinel> } }).wakeLock;
+			if (!wl || wakeLock) return;
+			const lock = await wl.request("screen");
+			wakeLock = lock;
+			// Снята системой (свернули, экономия заряда) — забываем, чтобы запросить снова
+			lock.addEventListener("release", () => {
+				if (wakeLock === lock) wakeLock = null;
+			});
 		} catch {
 			wakeLock = null;
 		}

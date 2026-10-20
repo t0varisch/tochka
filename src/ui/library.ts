@@ -12,7 +12,6 @@ export interface LibraryCtx {
 	openBook(id: string): void;
 }
 
-const ACCEPT = ".fb2,.zip,.epub,.txt,.pdf,application/epub+zip,application/pdf,text/plain,application/zip";
 /** Средний множитель пауз — для оценки «осталось» без разбора книги. */
 const AVG_PAUSE = 1.3;
 
@@ -24,7 +23,8 @@ function isIosSafari(): boolean {
 }
 
 export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<() => void> {
-	const fileInput = h("input", { type: "file", accept: ACCEPT, multiple: true, hidden: true });
+	// Без accept: iOS не знает .fb2 и делает такие файлы в «Файлах» серыми. Формат определяется по содержимому.
+	const fileInput = h("input", { type: "file", multiple: true, hidden: true });
 	const list = h("div.books");
 	const busy = h("div.busy", { "aria-live": "polite" });
 

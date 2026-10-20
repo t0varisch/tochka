@@ -1,6 +1,7 @@
 import "./styles.css";
 import { registerSW } from "virtual:pwa-register";
 import { applyTheme, loadSettings, saveSettings, watchSystemTheme } from "./settings";
+import { askPersist } from "./store";
 import { toast } from "./ui/dom";
 import { openLibrary } from "./ui/library";
 import { openReader } from "./ui/reader";
@@ -12,6 +13,8 @@ let routeSeq = 0;
 
 applyTheme(settings);
 watchSystemTheme(() => settings);
+// Просим браузер не вычищать книги из IndexedDB (на iPhone без этого Safari может удалить данные)
+askPersist();
 
 function persist(): void {
 	saveSettings(settings);

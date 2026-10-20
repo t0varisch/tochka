@@ -14,6 +14,7 @@ export default defineConfig({
 				short_name: "Точка",
 				description: "Читалка по одному слову: FB2, EPUB, TXT, PDF",
 				lang: "ru",
+				id: "./",
 				start_url: "./",
 				scope: "./",
 				display: "standalone",

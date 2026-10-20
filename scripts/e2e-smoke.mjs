@@ -1,7 +1,7 @@
 // Прогон по живому приложению: библиотека → загрузка книги → чтение → пауза → оглавление → настройки.
 // Снимки в test-output/. Запуск: npm run build && npx vite preview --port 4173 & BOOK=путь node scripts/e2e-smoke.mjs
 import { mkdirSync } from "node:fs";
-import { chromium } from "@playwright/test";
+import { chromium, webkit } from "@playwright/test";
 
 const base = process.env.BASE ?? "http://localhost:4173/";
 const book = process.env.BOOK;
@@ -11,12 +11,13 @@ const out = `test-output/${tag}`;
 mkdirSync(out, { recursive: true });
 
 const sizes = (process.env.SIZES ?? "390x844,320x640,1280x800").split(",").map((s) => s.split("x").map(Number));
-const browser = await chromium.launch({ channel: "chrome" });
+// BROWSER=webkit — движок Safari
+const browser = process.env.BROWSER === "webkit" ? await webkit.launch() : await chromium.launch({ channel: "chrome" });
 const problems = [];
 
 for (const [w, hgt] of sizes) {
 	const name = `${w}`;
-	const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, deviceScaleFactor: 1, hasTouch: w < 768 });
+	const ctx = await browser.newContext({ viewport: { width: w, height: hgt }, deviceScaleFactor: 1, hasTouch: w < 768, isMobile: process.env.BROWSER === "webkit" && w < 768 });
 	const page = await ctx.newPage();
 	page.on("console", (m) => m.type() === "error" && problems.push(`[${name}] console: ${m.text()}`));
 	page.on("pageerror", (e) => problems.push(`[${name}] pageerror: ${e.message}`));
