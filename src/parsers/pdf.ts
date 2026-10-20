@@ -22,6 +22,8 @@ export type PdfjsSource = PdfjsModule | (() => Promise<PdfjsModule>);
 
 export interface PdfOptions {
 	onProgress?: (fraction: number) => void;
+	/** Название текущего шага — показывается в строке загрузки, чтобы по скриншоту было видно, где застряло. */
+	onStage?: (stage: string) => void;
 	pdfjs?: PdfjsSource;
 }
 
@@ -455,6 +457,17 @@ async function outlineToc(doc: PdfDoc, outline: OutlineNode[], paras: Para[], nu
 
 // ---------- главное ----------
 
+/** Ждёт обещание не дольше ms; по истечении или при ошибке отдаёт запасное значение. */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+	return new Promise<T>((resolve) => {
+		const t = setTimeout(() => resolve(fallback), ms);
+		p.then(
+			(v) => (clearTimeout(t), resolve(v)),
+			() => (clearTimeout(t), resolve(fallback)),
+		);
+	});
+}
+
 export async function parsePdf(data: Uint8Array, fileName = "", opts: PdfOptions = {}): Promise<ParsedBook> {
 	const pdfjs = await resolvePdfjs(opts.pdfjs);
 	const task = pdfjs.getDocument({
@@ -491,6 +504,7 @@ export async function parsePdf(data: Uint8Array, fileName = "", opts: PdfOptions
 			opts.onProgress?.(p / numPages);
 		}
 		if (!numPages || chars / numPages < 20) throw new BookParseError(ERR_SCAN);
+		opts.onStage?.("собираю абзацы");
 
 		const all = pages.flat();
 		const bodyH = median(all.filter((l) => l.text.length >= 20).map((l) => l.h)) || median(all.map((l) => l.h)) || 10;
@@ -499,7 +513,9 @@ export async function parsePdf(data: Uint8Array, fileName = "", opts: PdfOptions
 		const paras = buildParagraphs(pages, bodyH, bookGap);
 		if (!paras.length) throw new BookParseError(ERR_EMPTY);
 
-		const meta = await doc.getMetadata().catch(() => null);
+		// Метаданные и оглавление необязательны: если воркер pdf.js не отвечает (замечено на iPhone), идём дальше без них
+		opts.onStage?.("читаю название");
+		const meta = await withTimeout(doc.getMetadata(), 5000, null);
 		const info = (meta?.info ?? {}) as Record<string, unknown>;
 		const metaTitle = typeof info.Title === "string" ? cleanParagraph(info.Title) : "";
 		let author = typeof info.Author === "string" ? cleanParagraph(info.Author) : "";
@@ -507,11 +523,13 @@ export async function parsePdf(data: Uint8Array, fileName = "", opts: PdfOptions
 		const title = meaningfulTitle(metaTitle) ? metaTitle : stripAuthorFromTitle(titleFromFileName(fileName), author);
 
 		let toc: TocEntry[] = [];
-		const outline = (await doc.getOutline().catch(() => null)) as OutlineNode[] | null;
-		if (outline?.length) toc = await outlineToc(doc, outline, paras, numPages);
+		opts.onStage?.("читаю оглавление");
+		const outline = (await withTimeout(doc.getOutline(), 5000, null)) as OutlineNode[] | null;
+		if (outline?.length) toc = await withTimeout(outlineToc(doc, outline, paras, numPages), 8000, []);
 
 		return { title, author, format: "pdf", paragraphs: paras.map((p) => p.text), toc };
 	} finally {
-		await task.destroy().catch(() => undefined);
+		// Не ждём: закрытие воркера не должно задерживать книгу
+		void withTimeout(task.destroy(), 3000, undefined);
 	}
 }

@@ -13,6 +13,8 @@ export type { PdfjsModule, PdfjsSource } from "./pdf";
 export interface ParseOptions {
 	/** Доля выполненной работы 0..1 */
 	onProgress?: (fraction: number) => void;
+	/** Название текущего шага разбора (сейчас — только PDF). */
+	onStage?: (stage: string) => void;
 	/** Только для тестов в Node: своя сборка pdf.js (legacy). */
 	pdfjs?: PdfjsSource;
 }
@@ -102,7 +104,7 @@ async function parseBytes(bytes: Uint8Array, name: string, opts: ParseOptions): 
 	if (kind === "zip") return parseZip(bytes, name, opts.onProgress);
 	if (kind === "pdf") {
 		const { parsePdf } = await import("./pdf");
-		return parsePdf(bytes, name, { onProgress: opts.onProgress, pdfjs: opts.pdfjs });
+		return parsePdf(bytes, name, { onProgress: opts.onProgress, onStage: opts.onStage, pdfjs: opts.pdfjs });
 	}
 	if (kind === "fb2") return parseFb2(bytes, name);
 	const unsupported = UNSUPPORTED[kind];
@@ -138,6 +140,7 @@ export async function parseFile(file: File, opts: ParseOptions = {}): Promise<Pa
 	}
 	if (!book.paragraphs.length) throw new BookParseError(ERR_EMPTY);
 	// нет оглавления в файле — ищем заголовки «Глава 1», «Часть II», «Пролог» в тексте
+	if (!book.toc.length) opts.onStage?.("ищу главы");
 	if (!book.toc.length) book.toc = detectToc(book.paragraphs, book.format === "txt" || book.format === "text");
 	opts.onProgress?.(1);
 	return book;

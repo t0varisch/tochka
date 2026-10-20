@@ -3,6 +3,7 @@ import type { Settings } from "../settings";
 import { addBook, askPersist, type BookMeta, deleteBook, listBooks } from "../store";
 import type { ParsedBook } from "../types";
 import { formatDuration, h, icon, iconButton, openSheet, plural, toast } from "./dom";
+import { inAppBrowser, isStandalone, platform } from "./inapp";
 import { openSettings } from "./settings-sheet";
 
 export interface LibraryCtx {
@@ -15,11 +16,49 @@ export interface LibraryCtx {
 /** Средний множитель пауз — для оценки «осталось» без разбора книги. */
 const AVG_PAUSE = 1.3;
 
-function isIosSafari(): boolean {
-	const ua = navigator.userAgent;
-	const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-	const standalone = (navigator as unknown as { standalone?: boolean }).standalone === true || window.matchMedia("(display-mode: standalone)").matches;
-	return ios && !standalone;
+/** Если за это время разбор не сдвинулся ни на шаг — считаем, что завис. */
+const STALL_MS = 60000;
+
+/** Плашка «открой в настоящем браузере» для встроенных окон Telegram и других приложений. */
+function inAppBanner(app: string): HTMLElement {
+	const p = platform();
+	const where = app === "приложения" ? "во встроенном окне приложения" : `во встроенном браузере ${app}`;
+	const how =
+		p === "ios"
+			? app === "Telegram"
+				? "Нажми на компас внизу справа или «⋯» → «Открыть в Safari»."
+				: "Нажми «⋯» или «Поделиться» → «Открыть в Safari»."
+			: "Нажми «⋮» вверху справа → «Открыть в браузере» (Chrome).";
+	const url = location.href.split("#")[0];
+	const copy = h("button.secondary", { type: "button" }, "Скопировать ссылку");
+	copy.addEventListener("click", async () => {
+		try {
+			await navigator.clipboard.writeText(url);
+			toast("Ссылка скопирована — вставь её в Safari или Chrome");
+		} catch {
+			toast(url, 6000);
+		}
+	});
+	const actions = h("div.banner-actions", {}, copy);
+	if (p === "android") {
+		const host = url.replace(/^https?:\/\//, "");
+		actions.prepend(h("a.primary", { href: `intent://${host}#Intent;scheme=https;package=com.android.chrome;end` }, "Открыть в Chrome"));
+	}
+	return h(
+		"div.banner",
+		{ role: "alert" },
+		h("strong", {}, `Ты открыл «Точку» ${where}.`),
+		h("p", {}, "Здесь книги могут пропасть, а приложение не поставить на экран. Открой ссылку в обычном браузере. ", how),
+		actions,
+	);
+}
+
+function installHint(): HTMLElement | null {
+	if (isStandalone()) return null;
+	const p = platform();
+	if (p === "ios") return h("p.hint", {}, "Чтобы читать как приложение: «Поделиться» (в новом Safari — через «⋯») → «На экран „Домой“».");
+	if (p === "android") return h("p.hint", {}, "Чтобы читать как приложение: меню «⋮» в Chrome → «Установить приложение».");
+	return null;
 }
 
 export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<() => void> {
@@ -27,6 +66,7 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 	const fileInput = h("input", { type: "file", multiple: true, hidden: true });
 	const list = h("div.books");
 	const busy = h("div.busy", { "aria-live": "polite" });
+	const app = inAppBrowser();
 
 	const view = h(
 		"div.library",
@@ -44,7 +84,7 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 			h("button.secondary", { type: "button", onclick: () => pasteText() }, icon("text", 20), "Вставить текст"),
 		),
 		h("p.formats", {}, "FB2, EPUB, TXT, PDF. Книга остаётся на этом устройстве."),
-		isIosSafari() ? h("p.hint", {}, "Чтобы читать как приложение: кнопка «Поделиться» внизу Safari → «На экран „Домой“».") : null,
+		app ? inAppBanner(app) : installHint(),
 		busy,
 		list,
 		fileInput,
@@ -90,14 +130,36 @@ export async function openLibrary(root: HTMLElement, ctx: LibraryCtx): Promise<(
 		const parsers = await import("../parsers");
 		let lastId = "";
 		for (const f of files) {
-			busy.textContent = `Открываю «${f.name}»…`;
+			let pct = 0;
+			let stage = "";
+			let moved = Date.now();
+			const show = () => {
+				moved = Date.now();
+				busy.textContent = `Открываю «${f.name}»… ${pct}%${stage ? ` · ${stage}` : ""}`;
+			};
+			show();
+			// Сторож: если разбор долго не двигается, показываем ошибку с названием шага, а не висим молча
+			let watch: ReturnType<typeof setInterval> | undefined;
+			const stalled = new Promise<never>((_, reject) => {
+				watch = setInterval(() => {
+					if (Date.now() - moved > STALL_MS) reject(new Error(`файл обрабатывается слишком долго (шаг: ${stage || `${pct}%`})`));
+				}, 2000);
+			});
 			try {
-				const book = await parsers.parseFile(f, {
-					onProgress: (x) => (busy.textContent = `Открываю «${f.name}»… ${Math.round(x * 100)}%`),
-				});
-				lastId = await save(book);
+				const book = await Promise.race([
+					parsers.parseFile(f, {
+						onProgress: (x) => ((pct = Math.round(x * 100)), show()),
+						onStage: (s) => ((stage = s), show()),
+					}),
+					stalled,
+				]);
+				stage = "сохраняю";
+				show();
+				lastId = await Promise.race([save(book), stalled]);
 			} catch (e) {
-				toast(`«${f.name}»: ${e instanceof Error ? e.message : "не получилось открыть"}`, 5000);
+				toast(`«${f.name}»: ${e instanceof Error ? e.message : "не получилось открыть"}`, 6000);
+			} finally {
+				clearInterval(watch);
 			}
 		}
 		busy.textContent = "";

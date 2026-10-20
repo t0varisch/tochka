@@ -759,3 +759,27 @@ input[type="checkbox"][role="switch"]:checked::before {
 		transition: none !important;
 	}
 }
+
+/* Плашка «открой в настоящем браузере» */
+.banner {
+	margin: 14px 0 0;
+	padding: 14px;
+	border: 2px solid var(--accent);
+	border-radius: 14px;
+	background: var(--hl);
+}
+.banner p {
+	margin: 6px 0 12px;
+	font-size: 15px;
+	line-height: 1.45;
+}
+.banner-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.banner-actions .primary,
+.banner-actions .secondary {
+	text-decoration: none;
+	min-height: 44px;
+}
